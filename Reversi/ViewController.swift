@@ -1,7 +1,7 @@
 import UIKit
 
-class ViewController: UIViewController {
-    @IBOutlet private var boardView: BoardView!
+class ViewController: UIViewController, GameStatusDelegate {
+    @IBOutlet private(set) var boardView: BoardView!
     
     @IBOutlet private var messageDiskView: DiskView!
     @IBOutlet private var messageLabel: UILabel!
@@ -14,12 +14,11 @@ class ViewController: UIViewController {
     /// その際に `messageDiskSize` に保管された値を使います。
     private var messageDiskSize: CGFloat!
     
-    @IBOutlet private var playerControls: [UISegmentedControl]!
+    @IBOutlet private(set) var playerControls: [UISegmentedControl]!
     @IBOutlet private var countLabels: [UILabel]!
     @IBOutlet private var playerActivityIndicators: [UIActivityIndicatorView]!
     
-    /// どちらの色のプレイヤーのターンかを表します。ゲーム終了時は `nil` です。
-    private var turn: Disk? = .dark
+    private lazy var gameStatus = GameStatus(delegate: self)
     
     private var animationCanceller: Canceller?
     private var isAnimating: Bool { animationCanceller != nil }
@@ -33,9 +32,15 @@ class ViewController: UIViewController {
         messageDiskSize = messageDiskSizeConstraint.constant
         
         do {
-            try loadGame()
+            try gameStatus.loadGame() {
+                updateMessageViews()
+                updateCountLabels()
+            }
         } catch _ {
-            newGame()
+            gameStatus.newGame() {
+                updateMessageViews()
+                updateCountLabels()
+            }
         }
     }
     
@@ -175,7 +180,7 @@ extension ViewController {
                 cleanUp()
 
                 completion?(isFinished)
-                try? self.saveGame()
+                try? self.gameStatus.saveGame()
                 self.updateCountLabels()
             }
         } else {
@@ -186,7 +191,7 @@ extension ViewController {
                     self.boardView.setDisk(disk, atX: x, y: y, animated: false)
                 }
                 completion?(true)
-                try? self.saveGame()
+                try? self.gameStatus.saveGame()
                 self.updateCountLabels()
             }
         }
@@ -223,24 +228,10 @@ extension ViewController {
 // MARK: Game management
 
 extension ViewController {
-    /// ゲームの状態を初期化し、新しいゲームを開始します。
-    func newGame() {
-        boardView.reset()
-        turn = .dark
-        
-        for playerControl in playerControls {
-            playerControl.selectedSegmentIndex = Player.manual.rawValue
-        }
-
-        updateMessageViews()
-        updateCountLabels()
-        
-        try? saveGame()
-    }
     
     /// プレイヤーの行動を待ちます。
     func waitForPlayer() {
-        guard let turn = self.turn else { return }
+        guard let turn = gameStatus.turn else { return }
         switch Player(rawValue: playerControls[turn.index].selectedSegmentIndex)! {
         case .manual:
             break
@@ -253,16 +244,16 @@ extension ViewController {
     /// もし、次のプレイヤーに有効な手が存在しない場合、パスとなります。
     /// 両プレイヤーに有効な手がない場合、ゲームの勝敗を表示します。
     func nextTurn() {
-        guard var turn = self.turn else { return }
+        guard var turn = gameStatus.turn else { return }
 
         turn.flip()
         
         if validMoves(for: turn).isEmpty {
             if validMoves(for: turn.flipped).isEmpty {
-                self.turn = nil
+                gameStatus.turn = nil
                 updateMessageViews()
             } else {
-                self.turn = turn
+                gameStatus.turn = turn
                 updateMessageViews()
                 
                 let alertController = UIAlertController(
@@ -276,7 +267,7 @@ extension ViewController {
                 present(alertController, animated: true)
             }
         } else {
-            self.turn = turn
+            gameStatus.turn = turn
             updateMessageViews()
             waitForPlayer()
         }
@@ -284,7 +275,7 @@ extension ViewController {
     
     /// "Computer" が選択されている場合のプレイヤーの行動を決定します。
     func playTurnOfComputer() {
-        guard let turn = self.turn else { preconditionFailure() }
+        guard let turn = gameStatus.turn else { preconditionFailure() }
         let (x, y) = validMoves(for: turn).randomElement()!
 
         playerActivityIndicators[turn.index].startAnimating()
@@ -321,7 +312,7 @@ extension ViewController {
     
     /// 現在の状況に応じてメッセージを表示します。
     func updateMessageViews() {
-        switch turn {
+        switch gameStatus.turn {
         case .some(let side):
             messageDiskSizeConstraint.constant = messageDiskSize
             messageDiskView.disk = side
@@ -363,7 +354,10 @@ extension ViewController {
                 self.playerCancellers.removeValue(forKey: side)
             }
             
-            self.newGame()
+            self.gameStatus.newGame() {
+                self.updateMessageViews()
+                self.updateCountLabels()
+            }
             self.waitForPlayer()
         })
         present(alertController, animated: true)
@@ -373,13 +367,13 @@ extension ViewController {
     @IBAction func changePlayerControlSegment(_ sender: UISegmentedControl) {
         let side: Disk = Disk(index: playerControls.firstIndex(of: sender)!)
         
-        try? saveGame()
+        try? gameStatus.saveGame()
         
         if let canceller = playerCancellers[side] {
             canceller.cancel()
         }
         
-        if !isAnimating, side == turn, case .computer = Player(rawValue: sender.selectedSegmentIndex)! {
+        if !isAnimating, side == gameStatus.turn, case .computer = Player(rawValue: sender.selectedSegmentIndex)! {
             playTurnOfComputer()
         }
     }
@@ -391,107 +385,13 @@ extension ViewController: BoardViewDelegate {
     /// - Parameter x: セルの列です。
     /// - Parameter y: セルの行です。
     func boardView(_ boardView: BoardView, didSelectCellAtX x: Int, y: Int) {
-        guard let turn = turn else { return }
+        guard let turn = gameStatus.turn else { return }
         if isAnimating { return }
         guard case .manual = Player(rawValue: playerControls[turn.index].selectedSegmentIndex)! else { return }
         // try? because doing nothing when an error occurs
         try? placeDisk(turn, atX: x, y: y, animated: true) { [weak self] _ in
             self?.nextTurn()
         }
-    }
-}
-
-// MARK: Save and Load
-
-extension ViewController {
-    private var path: String {
-        (NSSearchPathForDirectoriesInDomains(.libraryDirectory, .userDomainMask, true).first! as NSString).appendingPathComponent("Game")
-    }
-    
-    /// ゲームの状態をファイルに書き出し、保存します。
-    func saveGame() throws {
-        var output: String = ""
-        output += turn.symbol
-        for side in Disk.sides {
-            output += playerControls[side.index].selectedSegmentIndex.description
-        }
-        output += "\n"
-        
-        for y in boardView.yRange {
-            for x in boardView.xRange {
-                output += boardView.diskAt(x: x, y: y).symbol
-            }
-            output += "\n"
-        }
-        
-        do {
-            try output.write(toFile: path, atomically: true, encoding: .utf8)
-        } catch let error {
-            throw FileIOError.read(path: path, cause: error)
-        }
-    }
-    
-    /// ゲームの状態をファイルから読み込み、復元します。
-    func loadGame() throws {
-        let input = try String(contentsOfFile: path, encoding: .utf8)
-        var lines: ArraySlice<Substring> = input.split(separator: "\n")[...]
-        
-        guard var line = lines.popFirst() else {
-            throw FileIOError.read(path: path, cause: nil)
-        }
-        
-        do { // turn
-            guard
-                let diskSymbol = line.popFirst(),
-                let disk = Optional<Disk>(symbol: diskSymbol.description)
-            else {
-                throw FileIOError.read(path: path, cause: nil)
-            }
-            turn = disk
-        }
-
-        // players
-        for side in Disk.sides {
-            guard
-                let playerSymbol = line.popFirst(),
-                let playerNumber = Int(playerSymbol.description),
-                let player = Player(rawValue: playerNumber)
-            else {
-                throw FileIOError.read(path: path, cause: nil)
-            }
-            playerControls[side.index].selectedSegmentIndex = player.rawValue
-        }
-
-        do { // board
-            guard lines.count == boardView.height else {
-                throw FileIOError.read(path: path, cause: nil)
-            }
-            
-            var y = 0
-            while let line = lines.popFirst() {
-                var x = 0
-                for character in line {
-                    let disk = Disk?(symbol: "\(character)").flatMap { $0 }
-                    boardView.setDisk(disk, atX: x, y: y, animated: false)
-                    x += 1
-                }
-                guard x == boardView.width else {
-                    throw FileIOError.read(path: path, cause: nil)
-                }
-                y += 1
-            }
-            guard y == boardView.height else {
-                throw FileIOError.read(path: path, cause: nil)
-            }
-        }
-
-        updateMessageViews()
-        updateCountLabels()
-    }
-    
-    enum FileIOError: Error {
-        case write(path: String, cause: Error?)
-        case read(path: String, cause: Error?)
     }
 }
 
@@ -542,32 +442,6 @@ extension Disk {
         switch self {
         case .dark: return 0
         case .light: return 1
-        }
-    }
-}
-
-extension Optional where Wrapped == Disk {
-    fileprivate init?<S: StringProtocol>(symbol: S) {
-        switch symbol {
-        case "x":
-            self = .some(.dark)
-        case "o":
-            self = .some(.light)
-        case "-":
-            self = .none
-        default:
-            return nil
-        }
-    }
-    
-    fileprivate var symbol: String {
-        switch self {
-        case .some(.dark):
-            return "x"
-        case .some(.light):
-            return "o"
-        case .none:
-            return "-"
         }
     }
 }
