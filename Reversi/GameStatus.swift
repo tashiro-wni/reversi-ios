@@ -9,10 +9,12 @@
 import Foundation
 import UIKit
 
-protocol GameStatusDelegate: AnyObject {
+protocol GameStatusDelegate: UIViewController {
     var boardView: BoardView! { get }
     var playerControls: [UISegmentedControl]! { get }
+    var playerActivityIndicators: [UIActivityIndicatorView]! { get }
     func updateCountLabels()
+    func updateMessageViews()
 }
 
 final class GameStatus {
@@ -21,6 +23,8 @@ final class GameStatus {
     /// どちらの色のプレイヤーのターンかを表します。ゲーム終了時は `nil` です。
     var turn: Disk? = .dark
     var animationCanceller: Canceller?
+
+    var playerCancellers: [Disk: Canceller] = [:]
 
     init(delegate: GameStatusDelegate) {
         self.delegate = delegate
@@ -209,6 +213,81 @@ extension GameStatus {
     }
 }
 
+// MARK: Game management
+
+extension GameStatus {
+    
+    /// プレイヤーの行動を待ちます。
+    func waitForPlayer() {
+        guard let turn = turn, let delegate = delegate else { return }
+        switch Player(rawValue: delegate.playerControls[turn.index].selectedSegmentIndex)! {
+        case .manual:
+            break
+        case .computer:
+            playTurnOfComputer()
+        }
+    }
+    
+    /// プレイヤーの行動後、そのプレイヤーのターンを終了して次のターンを開始します。
+    /// もし、次のプレイヤーに有効な手が存在しない場合、パスとなります。
+    /// 両プレイヤーに有効な手がない場合、ゲームの勝敗を表示します。
+    func nextTurn() {
+        guard var turn = turn else { return }
+
+        turn.flip()
+        
+        if validMoves(for: turn).isEmpty {
+            if validMoves(for: turn.flipped).isEmpty {
+                self.turn = nil
+                delegate?.updateMessageViews()
+            } else {
+                self.turn = turn
+                delegate?.updateMessageViews()
+                
+                let alertController = UIAlertController(
+                    title: "Pass",
+                    message: "Cannot place a disk.",
+                    preferredStyle: .alert
+                )
+                alertController.addAction(UIAlertAction(title: "Dismiss", style: .default) { [weak self] _ in
+                    self?.nextTurn()
+                })
+                delegate?.present(alertController, animated: true)
+            }
+        } else {
+            self.turn = turn
+            delegate?.updateMessageViews()
+            waitForPlayer()
+        }
+    }
+    
+    /// "Computer" が選択されている場合のプレイヤーの行動を決定します。
+    func playTurnOfComputer() {
+        guard let turn = turn else { preconditionFailure() }
+        let (x, y) = validMoves(for: turn).randomElement()!
+
+        delegate?.playerActivityIndicators[turn.index].startAnimating()
+        
+        let cleanUp: () -> Void = { [weak self] in
+            guard let self = self else { return }
+            self.delegate?.playerActivityIndicators[turn.index].stopAnimating()
+            self.playerCancellers[turn] = nil
+        }
+        let canceller = Canceller(cleanUp)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard let self = self else { return }
+            if canceller.isCancelled { return }
+            cleanUp()
+            
+            try! self.placeDisk(turn, atX: x, y: y, animated: true) { [weak self] _ in
+                self?.nextTurn()
+            }
+        }
+        
+        playerCancellers[turn] = canceller
+    }
+}
+
 // MARK: - Save and Load
 extension GameStatus {
     /// ゲームの状態を初期化し、新しいゲームを開始します。
@@ -221,7 +300,7 @@ extension GameStatus {
         turn = .dark
         
         for playerControl in delegate.playerControls {
-            playerControl.selectedSegmentIndex = ViewController.Player.manual.rawValue
+            playerControl.selectedSegmentIndex = Player.manual.rawValue
         }
 
         completion()
@@ -288,7 +367,7 @@ extension GameStatus {
             guard
                 let playerSymbol = line.popFirst(),
                 let playerNumber = Int(playerSymbol.description),
-                let player = ViewController.Player(rawValue: playerNumber)
+                let player = Player(rawValue: playerNumber)
             else {
                 throw FileIOError.read(path: path, cause: nil)
             }
@@ -327,7 +406,56 @@ extension GameStatus {
     }
 }
 
-// MARK: -
+// MARK: - Additional types
+extension GameStatus {
+    enum Player: Int {
+        case manual = 0
+        case computer = 1
+    }
+}
+
+final class Canceller {
+    private(set) var isCancelled: Bool = false
+    private let body: (() -> Void)?
+    
+    init(_ body: (() -> Void)?) {
+        self.body = body
+    }
+    
+    func cancel() {
+        if isCancelled { return }
+        isCancelled = true
+        body?()
+    }
+}
+
+struct DiskPlacementError: Error {
+    let disk: Disk
+    let x: Int
+    let y: Int
+}
+
+// MARK: File-private extensions
+
+extension Disk {
+    init(index: Int) {
+        for side in Disk.sides {
+            if index == side.index {
+                self = side
+                return
+            }
+        }
+        preconditionFailure("Illegal index: \(index)")
+    }
+    
+    var index: Int {
+        switch self {
+        case .dark: return 0
+        case .light: return 1
+        }
+    }
+}
+
 extension Optional where Wrapped == Disk {
     fileprivate init?<S: StringProtocol>(symbol: S) {
         switch symbol {
