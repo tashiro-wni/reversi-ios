@@ -23,13 +23,15 @@ final class GameStatus {
     private weak var delegate: GameStatusDelegate?
     
     /// どちらの色のプレイヤーのターンかを表します。ゲーム終了時は `nil` です。
-    var turn: Disk? = .dark
-    var animationCanceller: Canceller?
+    private(set) var turn: Disk? = .dark
+    private var animationCanceller: Canceller?
 
-    var playerCancellers: [Disk: Canceller] = [:]
-
+    private var playerCancellers: [Disk: Canceller] = [:]
+    private var isAnimating: Bool { animationCanceller != nil }
+    
     init(delegate: GameStatusDelegate) {
         self.delegate = delegate
+        delegate.boardView.delegate = self
     }
 }
 
@@ -284,6 +286,54 @@ extension GameStatus {
     }
 }
 
+extension GameStatus: BoardViewDelegate {
+    /// `boardView` の `x`, `y` で指定されるセルがタップされたときに呼ばれます。
+    /// - Parameter boardView: セルをタップされた `BoardView` インスタンスです。
+    /// - Parameter x: セルの列です。
+    /// - Parameter y: セルの行です。
+    func boardView(_ boardView: BoardView, didSelectCellAtX x: Int, y: Int) {
+        guard let turn = turn else { return }
+        if isAnimating { return }
+        guard case .manual = delegate?.player(for: turn) else { return }
+        // try? because doing nothing when an error occurs
+        try? placeDisk(turn, atX: x, y: y, animated: true) { [weak self] _ in
+            self?.nextTurn()
+        }
+    }
+}
+
+extension GameStatus {
+    /// プレイヤーのモードが変更された場合に呼ばれるハンドラーです。
+    func changePlayer(for side: Disk) {
+        try? saveGame()
+
+        if let canceller = playerCancellers[side] {
+            canceller.cancel()
+        }
+        
+        if !isAnimating, side == turn, case .computer = delegate?.player(for: side) {
+            playTurnOfComputer()
+        }
+    }
+    
+    /// リセットが押された場合の処理、ゲームを初期化する。
+    func resetGame() {
+        animationCanceller?.cancel()
+        animationCanceller = nil
+        
+        for side in Disk.sides {
+            playerCancellers[side]?.cancel()
+            playerCancellers.removeValue(forKey: side)
+        }
+        
+        newGame() {
+            delegate?.updateMessageViews()
+            delegate?.updateCountLabels()
+        }
+        waitForPlayer()
+    }
+}
+
 // MARK: - Save and Load
 extension GameStatus {
     /// ゲームの状態を初期化し、新しいゲームを開始します。
@@ -295,9 +345,6 @@ extension GameStatus {
         delegate.boardView.reset()
         turn = .dark
         
-//        for playerControl in delegate.playerControls {
-//            playerControl.selectedSegmentIndex = Player.manual.rawValue
-//        }
         for side in Disk.allCases {
             delegate.set(player: .manual, for: side)
         }

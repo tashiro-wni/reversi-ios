@@ -20,12 +20,9 @@ class ViewController: UIViewController, GameStatusDelegate {
     
     private lazy var gameStatus = GameStatus(delegate: self)
     
-    private var isAnimating: Bool { gameStatus.animationCanceller != nil }
-        
     override func viewDidLoad() {
         super.viewDidLoad()
         
-        boardView.delegate = self
         messageDiskSize = messageDiskSizeConstraint.constant
         
         do {
@@ -55,10 +52,12 @@ class ViewController: UIViewController, GameStatusDelegate {
 // MARK: Views
 
 extension ViewController {
+    /// 指定された色の SegmentControl から、手動かコンピューターかを取得する
     func player(for side: Disk) -> GameStatus.Player {
         GameStatus.Player(rawValue: playerControls[side.index].selectedSegmentIndex)!
     }
     
+    /// 指定された色のプレイヤーが手動かコンピューターかを設定する
     func set(player: GameStatus.Player, for side: Disk) {
         playerControls[side.index].selectedSegmentIndex = player.rawValue
     }
@@ -124,21 +123,7 @@ extension ViewController {
         )
         alertController.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in })
         alertController.addAction(UIAlertAction(title: "OK", style: .default) { [weak self] _ in
-            guard let self = self else { return }
-            
-            self.gameStatus.animationCanceller?.cancel()
-            self.gameStatus.animationCanceller = nil
-            
-            for side in Disk.sides {
-                self.gameStatus.playerCancellers[side]?.cancel()
-                self.gameStatus.playerCancellers.removeValue(forKey: side)
-            }
-            
-            self.gameStatus.newGame() {
-                self.updateMessageViews()
-                self.updateCountLabels()
-            }
-            self.gameStatus.waitForPlayer()
+            self?.gameStatus.resetGame()
         })
         present(alertController, animated: true)
     }
@@ -147,30 +132,6 @@ extension ViewController {
     @IBAction func changePlayerControlSegment(_ sender: UISegmentedControl) {
         let side: Disk = Disk(index: playerControls.firstIndex(of: sender)!)
         
-        try? gameStatus.saveGame()
-        
-        if let canceller = gameStatus.playerCancellers[side] {
-            canceller.cancel()
-        }
-        
-        if !isAnimating, side == gameStatus.turn, case .computer = GameStatus.Player(rawValue: sender.selectedSegmentIndex)! {
-            gameStatus.playTurnOfComputer()
-        }
-    }
-}
-
-extension ViewController: BoardViewDelegate {
-    /// `boardView` の `x`, `y` で指定されるセルがタップされたときに呼ばれます。
-    /// - Parameter boardView: セルをタップされた `BoardView` インスタンスです。
-    /// - Parameter x: セルの列です。
-    /// - Parameter y: セルの行です。
-    func boardView(_ boardView: BoardView, didSelectCellAtX x: Int, y: Int) {
-        guard let turn = gameStatus.turn else { return }
-        if isAnimating { return }
-        guard case .manual = GameStatus.Player(rawValue: playerControls[turn.index].selectedSegmentIndex)! else { return }
-        // try? because doing nothing when an error occurs
-        try? gameStatus.placeDisk(turn, atX: x, y: y, animated: true) { [weak self] _ in
-            self?.gameStatus.nextTurn()
-        }
+        gameStatus.changePlayer(for: side)
     }
 }
