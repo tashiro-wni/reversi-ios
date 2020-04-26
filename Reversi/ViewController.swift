@@ -1,6 +1,6 @@
 import UIKit
 
-class ViewController: UIViewController, GameStatusDelegate {
+class ViewController: UIViewController {
     @IBOutlet private(set) var boardView: BoardView!
     
     @IBOutlet private var messageDiskView: DiskView!
@@ -14,9 +14,9 @@ class ViewController: UIViewController, GameStatusDelegate {
     /// その際に `messageDiskSize` に保管された値を使います。
     private var messageDiskSize: CGFloat!
     
-    @IBOutlet private(set) var playerControls: [UISegmentedControl]!
+    @IBOutlet private var playerControls: [UISegmentedControl]!
     @IBOutlet private var countLabels: [UILabel]!
-    @IBOutlet private(set) var playerActivityIndicators: [UIActivityIndicatorView]!
+    @IBOutlet private var playerActivityIndicators: [UIActivityIndicatorView]!
     
     private lazy var gameStatus = GameStatus(delegate: self)
     
@@ -48,10 +48,8 @@ class ViewController: UIViewController, GameStatusDelegate {
     }
 }
 
-
-// MARK: Views
-
-extension ViewController {
+// MARK: - GameStatusDelegate
+extension ViewController: GameStatusDelegate {
     /// 指定された色の SegmentControl から、手動かコンピューターかを取得する
     func player(for side: Disk) -> GameStatus.Player {
         GameStatus.Player(rawValue: playerControls[side.index].selectedSegmentIndex)!
@@ -96,6 +94,7 @@ extension ViewController {
         }
     }
     
+    // 駒を置けない場合に表示するAlert
     func showNoPlaceAlert(completion: @escaping(() -> Void)) {
         let alertController = UIAlertController(
             title: "Pass",
@@ -109,8 +108,7 @@ extension ViewController {
     }
 }
 
-// MARK: Inputs
-
+// MARK: - UI Inputs
 extension ViewController {
     /// リセットボタンが押された場合に呼ばれるハンドラーです。
     /// アラートを表示して、ゲームを初期化して良いか確認し、
