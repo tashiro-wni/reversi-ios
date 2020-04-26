@@ -20,8 +20,7 @@ class ViewController: UIViewController, GameStatusDelegate {
     
     private lazy var gameStatus = GameStatus(delegate: self)
     
-    private var animationCanceller: Canceller?
-    private var isAnimating: Bool { animationCanceller != nil }
+    private var isAnimating: Bool { gameStatus.animationCanceller != nil }
     
     private var playerCancellers: [Disk: Canceller] = [:]
     
@@ -51,81 +50,6 @@ class ViewController: UIViewController, GameStatusDelegate {
         if viewHasAppeared { return }
         viewHasAppeared = true
         waitForPlayer()
-    }
-}
-
-// MARK: Reversi logics
-
-extension ViewController {
-
-    /// `x`, `y` で指定されたセルに `disk` を置きます。
-    /// - Parameter x: セルの列です。
-    /// - Parameter y: セルの行です。
-    /// - Parameter isAnimated: ディスクを置いたりひっくり返したりするアニメーションを表示するかどうかを指定します。
-    /// - Parameter completion: アニメーション完了時に実行されるクロージャです。
-    ///     このクロージャは値を返さず、アニメーションが完了したかを示す真偽値を受け取ります。
-    ///     もし `animated` が `false` の場合、このクロージャは次の run loop サイクルの初めに実行されます。
-    /// - Throws: もし `disk` を `x`, `y` で指定されるセルに置けない場合、 `DiskPlacementError` を `throw` します。
-    func placeDisk(_ disk: Disk, atX x: Int, y: Int, animated isAnimated: Bool, completion: ((Bool) -> Void)? = nil) throws {
-        let diskCoordinates = gameStatus.flippedDiskCoordinatesByPlacingDisk(disk, atX: x, y: y)
-        if diskCoordinates.isEmpty {
-            throw DiskPlacementError(disk: disk, x: x, y: y)
-        }
-        
-        if isAnimated {
-            let cleanUp: () -> Void = { [weak self] in
-                self?.animationCanceller = nil
-            }
-            animationCanceller = Canceller(cleanUp)
-            animateSettingDisks(at: [(x, y)] + diskCoordinates, to: disk) { [weak self] isFinished in
-                guard let self = self else { return }
-                guard let canceller = self.animationCanceller else { return }
-                if canceller.isCancelled { return }
-                cleanUp()
-
-                completion?(isFinished)
-                try? self.gameStatus.saveGame()
-                self.updateCountLabels()
-            }
-        } else {
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                self.boardView.setDisk(disk, atX: x, y: y, animated: false)
-                for (x, y) in diskCoordinates {
-                    self.boardView.setDisk(disk, atX: x, y: y, animated: false)
-                }
-                completion?(true)
-                try? self.gameStatus.saveGame()
-                self.updateCountLabels()
-            }
-        }
-    }
-    
-    /// `coordinates` で指定されたセルに、アニメーションしながら順番に `disk` を置く。
-    /// `coordinates` から先頭の座標を取得してそのセルに `disk` を置き、
-    /// 残りの座標についてこのメソッドを再帰呼び出しすることで処理が行われる。
-    /// すべてのセルに `disk` が置けたら `completion` ハンドラーが呼び出される。
-    private func animateSettingDisks<C: Collection>(at coordinates: C, to disk: Disk, completion: @escaping (Bool) -> Void)
-        where C.Element == (Int, Int)
-    {
-        guard let (x, y) = coordinates.first else {
-            completion(true)
-            return
-        }
-        
-        let animationCanceller = self.animationCanceller!
-        boardView.setDisk(disk, atX: x, y: y, animated: true) { [weak self] isFinished in
-            guard let self = self else { return }
-            if animationCanceller.isCancelled { return }
-            if isFinished {
-                self.animateSettingDisks(at: coordinates.dropFirst(), to: disk, completion: completion)
-            } else {
-                for (x, y) in coordinates {
-                    self.boardView.setDisk(disk, atX: x, y: y, animated: false)
-                }
-                completion(false)
-            }
-        }
     }
 }
 
@@ -195,7 +119,7 @@ extension ViewController {
             if canceller.isCancelled { return }
             cleanUp()
             
-            try! self.placeDisk(turn, atX: x, y: y, animated: true) { [weak self] _ in
+            try! self.gameStatus.placeDisk(turn, atX: x, y: y, animated: true) { [weak self] _ in
                 self?.nextTurn()
             }
         }
@@ -250,8 +174,8 @@ extension ViewController {
         alertController.addAction(UIAlertAction(title: "OK", style: .default) { [weak self] _ in
             guard let self = self else { return }
             
-            self.animationCanceller?.cancel()
-            self.animationCanceller = nil
+            self.gameStatus.animationCanceller?.cancel()
+            self.gameStatus.animationCanceller = nil
             
             for side in Disk.sides {
                 self.playerCancellers[side]?.cancel()
@@ -293,7 +217,7 @@ extension ViewController: BoardViewDelegate {
         if isAnimating { return }
         guard case .manual = Player(rawValue: playerControls[turn.index].selectedSegmentIndex)! else { return }
         // try? because doing nothing when an error occurs
-        try? placeDisk(turn, atX: x, y: y, animated: true) { [weak self] _ in
+        try? gameStatus.placeDisk(turn, atX: x, y: y, animated: true) { [weak self] _ in
             self?.nextTurn()
         }
     }
