@@ -7,14 +7,16 @@
 //
 
 import Foundation
-import UIKit
 
-protocol GameStatusDelegate: UIViewController {
+protocol GameStatusDelegate: AnyObject {
     var boardView: BoardView! { get }
-    var playerControls: [UISegmentedControl]! { get }
-    var playerActivityIndicators: [UIActivityIndicatorView]! { get }
     func updateCountLabels()
     func updateMessageViews()
+    func player(for turn: Disk) -> GameStatus.Player
+    func set(player: GameStatus.Player, for side: Disk)
+    func startPlayerActivityIndicator(for index: Int)
+    func stopPlayerActivityIndicator(for index: Int)
+    func showNoPlaceAlert(completion: @escaping(() -> Void))
 }
 
 final class GameStatus {
@@ -220,7 +222,7 @@ extension GameStatus {
     /// プレイヤーの行動を待ちます。
     func waitForPlayer() {
         guard let turn = turn, let delegate = delegate else { return }
-        switch Player(rawValue: delegate.playerControls[turn.index].selectedSegmentIndex)! {
+        switch delegate.player(for: turn) {
         case .manual:
             break
         case .computer:
@@ -244,15 +246,9 @@ extension GameStatus {
                 self.turn = turn
                 delegate?.updateMessageViews()
                 
-                let alertController = UIAlertController(
-                    title: "Pass",
-                    message: "Cannot place a disk.",
-                    preferredStyle: .alert
-                )
-                alertController.addAction(UIAlertAction(title: "Dismiss", style: .default) { [weak self] _ in
+                delegate?.showNoPlaceAlert { [weak self] in
                     self?.nextTurn()
-                })
-                delegate?.present(alertController, animated: true)
+                }
             }
         } else {
             self.turn = turn
@@ -266,11 +262,11 @@ extension GameStatus {
         guard let turn = turn else { preconditionFailure() }
         let (x, y) = validMoves(for: turn).randomElement()!
 
-        delegate?.playerActivityIndicators[turn.index].startAnimating()
+        delegate?.startPlayerActivityIndicator(for: turn.index)
         
         let cleanUp: () -> Void = { [weak self] in
             guard let self = self else { return }
-            self.delegate?.playerActivityIndicators[turn.index].stopAnimating()
+            self.delegate?.stopPlayerActivityIndicator(for: turn.index)
             self.playerCancellers[turn] = nil
         }
         let canceller = Canceller(cleanUp)
@@ -299,10 +295,13 @@ extension GameStatus {
         delegate.boardView.reset()
         turn = .dark
         
-        for playerControl in delegate.playerControls {
-            playerControl.selectedSegmentIndex = Player.manual.rawValue
+//        for playerControl in delegate.playerControls {
+//            playerControl.selectedSegmentIndex = Player.manual.rawValue
+//        }
+        for side in Disk.allCases {
+            delegate.set(player: .manual, for: side)
         }
-
+        
         completion()
         
         try? saveGame()
@@ -321,7 +320,7 @@ extension GameStatus {
         var output: String = ""
         output += turn.symbol
         for side in Disk.sides {
-            output += delegate.playerControls[side.index].selectedSegmentIndex.description
+            output += delegate.player(for: side).rawValue.description  // Int => String
         }
         output += "\n"
         
@@ -371,7 +370,7 @@ extension GameStatus {
             else {
                 throw FileIOError.read(path: path, cause: nil)
             }
-            delegate.playerControls[side.index].selectedSegmentIndex = player.rawValue
+            delegate.set(player: player, for: side)
         }
 
         do { // board

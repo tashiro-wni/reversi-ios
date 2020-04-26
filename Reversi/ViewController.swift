@@ -55,6 +55,22 @@ class ViewController: UIViewController, GameStatusDelegate {
 // MARK: Views
 
 extension ViewController {
+    func player(for side: Disk) -> GameStatus.Player {
+        GameStatus.Player(rawValue: playerControls[side.index].selectedSegmentIndex)!
+    }
+    
+    func set(player: GameStatus.Player, for side: Disk) {
+        playerControls[side.index].selectedSegmentIndex = player.rawValue
+    }
+    
+    func startPlayerActivityIndicator(for index: Int) {
+        playerActivityIndicators[index].startAnimating()
+    }
+    
+    func stopPlayerActivityIndicator(for index: Int) {
+        playerActivityIndicators[index].stopAnimating()
+    }
+    
     /// 各プレイヤーの獲得したディスクの枚数を表示します。
     func updateCountLabels() {
         for side in Disk.sides {
@@ -79,6 +95,18 @@ extension ViewController {
                 messageLabel.text = "Tied"
             }
         }
+    }
+    
+    func showNoPlaceAlert(completion: @escaping(() -> Void)) {
+        let alertController = UIAlertController(
+            title: "Pass",
+            message: "Cannot place a disk.",
+            preferredStyle: .alert
+        )
+        alertController.addAction(UIAlertAction(title: "Dismiss", style: .default) { _ in
+            completion()
+        })
+        present(alertController, animated: true)
     }
 }
 
